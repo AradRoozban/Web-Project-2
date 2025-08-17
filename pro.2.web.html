@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>🚦 3D Traffic Simulator with Accidents & Emergency</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #1a1a1a; }
+    canvas { display: block; }
+    #infoBox {
+      position: fixed;
+      top: 10px; left: 10px;
+      color: white;
+      background: rgba(0,0,0,0.6);
+      padding: 10px;
+      border-radius: 8px;
+      font-family: sans-serif;
+      max-width: 300px;
+      z-index: 100;
+    }
+  </style>
+</head>
+<body>
+  <div id="infoBox">🚨 Traffic Simulator with accidents and emergency vehicles</div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script>
+    // === Setup scene, camera, renderer ===
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0x1a1a1a, 50, 120);
+
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({antialias:true});
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // Lights
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
+    directionalLight.position.set(50, 100, 50);
+    directionalLight.castShadow = true;
+    scene.add(ambientLight, directionalLight);
+
+    // Ground, roads, curbs and lines (simplified from your code)
+    const groundGeometry = new THREE.PlaneGeometry(100, 100);
+    const groundMaterial = new THREE.MeshStandardMaterial({color:0x222222});
+    const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    // Roads
+    const roadWidth = 40, roadLength = 100, roadHeight = 0.1;
+    const roadMat = new THREE.MeshStandardMaterial({color:0x444444});
+    const verticalRoad = new THREE.Mesh(new THREE.BoxGeometry(roadWidth, roadHeight, roadLength), roadMat);
+    verticalRoad.position.set(0, 0.05, 0);
+    verticalRoad.receiveShadow = true;
+    scene.add(verticalRoad);
+    const horizontalRoad = new THREE.Mesh(new THREE.BoxGeometry(roadLength, roadHeight, roadWidth), roadMat);
+    horizontalRoad.position.set(0, 0.05, 0);
+    horizontalRoad.receiveShadow = true;
+    scene.add(horizontalRoad);
+
+    // Curbs (simplified)
+    const curbHeight = 0.5, curbThickness = 1;
+    const curbMat = new THREE.MeshStandardMaterial({color: 0xffffff});
+    const curbVerticalGeom = new THREE.BoxGeometry(curbThickness, curbHeight, roadLength + 4);
+    const curbLeftVertical = new THREE.Mesh(curbVerticalGeom, curbMat);
+    curbLeftVertical.position.set(-(roadWidth/2 + curbThickness/2), curbHeight/2, 0);
+    curbLeftVertical.receiveShadow = true;
+    scene.add(curbLeftVertical);
+    const curbRightVertical = new THREE.Mesh(curbVerticalGeom, curbMat);
+    curbRightVertical.position.set(roadWidth/2 + curbThickness/2, curbHeight/2, 0);
+    curbRightVertical.receiveShadow = true;
+    scene.add(curbRightVertical);
+    const curbHorizontalGeom = new THREE.BoxGeometry(roadLength + 4, curbHeight, curbThickness);
+    const curbTopHorizontal = new THREE.Mesh(curbHorizontalGeom, curbMat);
+    curbTopHorizontal.position.set(0, curbHeight/2, -(roadWidth/2 + curbThickness/2));
+    curbTopHorizontal.receiveShadow = true;
+    scene.add(curbTopHorizontal);
+    const curbBottomHorizontal = new THREE.Mesh(curbHorizontalGeom, curbMat);
+    curbBottomHorizontal.position.set(0, curbHeight/2, roadWidth/2 + curbThickness/2);
+    curbBottomHorizontal.receiveShadow = true;
+    scene.add(curbBottomHorizontal);
+
+    // Lines center
+    const lineThickness = 0.5, lineLength = 10, lineHeight = 0.2;
+    const lineColor = 0xffd800;
+    const verticalLine = new THREE.Mesh(
+      new THREE.BoxGeometry(lineThickness, lineHeight, lineLength),
+      new THREE.MeshStandardMaterial({color: lineColor, emissive: lineColor})
+    );
+    verticalLine.position.set(0, lineHeight/2 + 0.11, 0);
+    scene.add(verticalLine);
+    const horizontalLine = new THREE.Mesh(
+      new THREE.BoxGeometry(lineLength, lineHeight, lineThickness),
+      new THREE.MeshStandardMaterial({color: lineColor, emissive: lineColor})
+    );
+    horizontalLine.position.set(0, lineHeight/2 + 0.11, 0);
+    scene.add(horizontalLine);
+
+    // Traffic Light class
+    class TrafficLight {
+      constructor(x, z, initialColor = 'red') {
+        this.group = new THREE.Group();
+        const poleGeom = new THREE.CylinderGeometry(0.3, 0.3, 5);
+        const poleMat = new THREE.MeshStandardMaterial({color:0x222222});
+        const pole = new THREE.Mesh(poleGeom, poleMat);
+        pole.position.y = 2.5;
+        this.group.add(pole);
+        const boxGeom = new THREE.BoxGeometry(1, 2.5, 1);
+        const boxMat = new THREE.MeshStandardMaterial({color:0x111111});
+        const box = new THREE.Mesh(boxGeom, boxMat);
+        box.position.y = 4.25;
+        this.group.add(box);
+        this.redLight = new THREE.Mesh(new THREE.SphereGeometry(0.4), new THREE.MeshStandardMaterial({color:0x550000, emissive:0x000000}));
+        this.redLight.position.set(0, 5.3, 0.45);
+        this.group.add(this.redLight);
+        this.yellowLight = new THREE.Mesh(new THREE.SphereGeometry(0.4), new THREE.MeshStandardMaterial({color:0x555500, emissive:0x000000}));
+        this.yellowLight.position.set(0, 4.7, 0.45);
+        this.group.add(this.yellowLight);
+        this.greenLight = new THREE.Mesh(new THREE.SphereGeometry(0.4), new THREE.MeshStandardMaterial({color:0x005500, emissive:0x000000}));
+        this.greenLight.position.set(0, 4.1, 0.45);
+        this.group.add(this.greenLight);
+        this.group.position.set(x, 0, z);
+        scene.add(this.group);
+        this.setColor(initialColor);
+      }
+      setColor(color) {
+        this.redLight.material.emissive.set(0x000000);
+        this.yellowLight.material.emissive.set(0x000000);
+        this.greenLight.material.emissive.set(0x000000);
+        switch(color) {
+          case 'red': this.redLight.material.emissive.set(0xff0000); break;
+          case 'yellow': this.yellowLight.material.emissive.set(0xffff00); break;
+          case 'green': this.greenLight.material.emissive.set(0x00ff00); break;
+        }
+        this.currentColor = color;
+      }
+    }
+
+    // Traffic Lights dictionary for NS and EW
+    const trafficLights = {
+      NS: [
+        new TrafficLight(-(roadWidth/2 + curbThickness + 1), -(roadWidth/2 + curbThickness + 1), 'green'),
+        new TrafficLight(-(roadWidth/2 + curbThickness + 1), (roadWidth/2 + curbThickness + 1), 'green'),
+      ],
+      EW: [
+        new TrafficLight((roadWidth/2 + curbThickness + 1), -(roadWidth/2 + curbThickness + 1), 'red'),
+        new TrafficLight((roadWidth/2 + curbThickness + 1), (roadWidth/2 + curbThickness + 1), 'red'),
+      ]
+    };
+
+    // Colors for cars
+    const carColors = [0xff0000, 0x2194ce, 0x00ff00, 0xffa500, 0x800080, 0xffff00];
+
+    // Car class with collision detection
+    class Car {
+      constructor(x, z, dir) {
+        this.group = new THREE.Group();
+
+        // Random color
+        const color = carColors[Math.floor(Math.random() * carColors.length)];
+
+        const body = new THREE.Mesh(
+          new THREE.BoxGeometry(2, 1, 4),
+          new THREE.MeshStandardMaterial({color})
+        );
+        body.position.y = 0.5;
+
+        const top = new THREE.Mesh(
+          new THREE.BoxGeometry(1.5, 0.6, 2),
+          new THREE.MeshStandardMaterial({color: 0xeeeeee})
+        );
+        top.position.set(0, 1, 0);
+
+        this.group.add(body, top);
+
+        this.group.position.set(x, 0.1, z);
+        this.direction = dir;
+        this.speed = 0.15;
+        this.isStopped = false;
+        this.isPenalized = false;
+
+        // Rotation according to direction
+        if(dir === 'NS') this.group.rotation.y = Math.PI;
+        else if(dir === 'EW') this.group.rotation.y = -Math.PI/2;
+
+        scene.add(this.group);
+      }
+
+      update(lightStatus) {
+        if(this.isStopped) return; // اگر ماشین متوقف شده حرکت نمی‌کند
+
+        if(lightStatus[this.direction] === 'green') {
+          if(this.direction === 'NS') {
+            this.group.position.z += this.speed;
+            if(this.group.position.z > (roadLength/2 + 10)) this.group.position.z = -(roadLength/2 + 10);
+          } else {
+            this.group.position.x -= this.speed;
+            if(this.group.position.x < -(roadLength/2 + 10)) this.group.position.x = (roadLength/2 + 10);
+          }
+        }
+      }
+
+      distanceTo(otherCar) {
+        const pos1 = this.group.position;
+        const pos2 = otherCar.group.position;
+        return pos1.distanceTo(pos2);
+      }
+
+      stop() {
+        this.isStopped = true;
+      }
+      start() {
+        this.isStopped = false;
+      }
+      penalize() {
+        this.isPenalized = true;
+        // تغییر رنگ به قرمز تیره برای نشان دادن جریمه
+        this.group.children[0].material.color.set(0x8b0000);
+      }
+      resetPenalty() {
+        this.isPenalized = false;
+        this.group.children[0].material.color.set(0xff0000);
+      }
+    }
+
+    // ساده‌ترین مدل انسان پرت شده (یک کره سر و مکعب بدن)
+    class Human {
+      constructor(position) {
+        this.group = new THREE.Group();
+
+        const head = new THREE.Mesh(
+          new THREE.SphereGeometry(0.3),
+          new THREE.MeshStandardMaterial({color:0xffccaa})
+        );
+        head.position.set(0, 1.6, 0);
+        const body = new THREE.Mesh(
+          new THREE.BoxGeometry(0.7, 1, 0.4),
+          new THREE.MeshStandardMaterial({color:0xffccaa})
+        );
+        body.position.set(0, 0.8, 0);
+        this.group.add(head, body);
+
+        this.group.position.copy(position);
+        scene.add(this.group);
+
+        this.fallen = false;
+        this.speed = 0.02;
+      }
+
+      update() {
+        if(!this.fallen) {
+          this.group.position.y -= 0.05;
+          if(this.group.position.y < 0.5) {
+            this.fallen = true;
+          }
+        } else {
+          // بعد از سقوط حرکت به سمت آمبولانس
+          if(ambulance) {
+            const dir = new THREE.Vector3().subVectors(ambulance.group.position, this.group.position).normalize();
+            this.group.position.add(dir.multiplyScalar(this.speed));
+            if(this.group.position.distanceTo(ambulance.group.position) < 1) {
+              // رسیدن به آمبولانس = حذف انسان از صحنه
+              scene.remove(this.group);
+              humanInjured = null;
+              ambulance.pickupDone = true;
+            }
+          }
+        }
+      }
+    }
+
+    // ماشین پلیس
+    class PoliceCar extends Car {
+      constructor(x, z, dir) {
+        super(x, z, dir);
+        this.group.children[0].material.color.set(0x0000ff);
+        this.speed = 0.2;
+        this.isOnDuty = false;
+        this.targetCar = null;
+      }
+
+      // حرکت به سمت ماشین متخلف
+      chase(target) {
+        this.isOnDuty = true;
+        this.targetCar = target;
+      }
+
+      update() {
+        if(!this.isOnDuty) return;
+        if(!this.targetCar) return;
+
+        // جهت حرکت به سمت ماشین متخلف
+        const targetPos = this.targetCar.group.position.clone();
+        const currentPos = this.group.position.clone();
+        const dirVec = new THREE.Vector3().subVectors(targetPos, currentPos);
+        const dist = dirVec.length();
+        if(dist > 1) {
+          dirVec.normalize();
+          this.group.position.add(dirVec.multiplyScalar(this.speed));
+        } else {
+          // رسیدن به ماشین متخلف، ماشین را جریمه و می‌برد (ماشین متوقف می‌شود)
+          this.targetCar.stop();
+          this.targetCar.penalize();
+
+          // پلیس بعد از مدتی ماشین را "می‌برد" (ماشین را حذف می‌کند)
+          setTimeout(() => {
+            scene.remove(this.targetCar.group);
+            cars = cars.filter(c => c !== this.targetCar);
+            this.isOnDuty = false;
+            this.targetCar = null;
+            // پایان تصادف، ترافیک سبک‌تر می‌شود
+            trafficJam = false;
+          }, 8000);
+        }
+      }
+    }
+
+    // آمبولانس (مشابه ماشین با رنگ خاص)
+    class Ambulance extends Car {
+      constructor(x, z, dir) {
+        super(x, z, dir);
+        this.group.children[0].material.color.set(0xffffff);
+        this.speed = 0.25;
+        this.pickupDone = false;
+        this.isOnDuty = false;
+      }
+
+      // حرکت به محل انسان آسیب دیده
+      rescue(human) {
+        this.isOnDuty = true;
+        this.targetHuman = human;
+      }
+
+      update() {
+        if(!this.isOnDuty) return;
+
+        if(this.targetHuman) {
+          const targetPos = this.targetHuman.group.position.clone();
+          const currentPos = this.group.position.clone();
+          const dirVec = new THREE.Vector3().subVectors(targetPos, currentPos);
+          const dist = dirVec.length();
+          if(dist > 1) {
+            dirVec.normalize();
+            this.group.position.add(dirVec.multiplyScalar(this.speed));
+          } else {
+            // رسیدن به انسان
+            this.pickupDone = true;
+            this.isOnDuty = false;
+            this.targetHuman = null;
+          }
+        }
+      }
+    }
+
+    // متغیرهای شبیه سازی
+    let cars = [];
+    let policeCar = null;
+    let ambulance = null;
+    let humanInjured = null;
+    let trafficJam = false;
+
+   // وضعیت چراغ راهنمایی
+    const greenDuration = 10000; // 10 ثانیه
+    let lastSwitch = Date.now();
+    let currentLight = 'NS';
+
+    function updateTrafficLights() {
+      if(Date.now() - lastSwitch > greenDuration) {
+        currentLight = currentLight === 'NS' ? 'EW' : 'NS';
+        lastSwitch = Date.now();
+
+        if(currentLight === 'NS') {
+          trafficLights.NS.forEach(l => l.setColor('green'));
+          trafficLights.EW.forEach(l => l.setColor('red'));
+        } else {
+          trafficLights.NS.forEach(l => l.setColor('red'));
+          trafficLights.EW.forEach(l => l.setColor('green'));
+        }
+      }
+    }
+
+    // نمایش زمان باقی مانده برای چراغ سبز
+    const timerDisplay = document.getElementById('timerDisplay');
+    function updateTimerDisplay() {
+      const elapsed = Date.now() - lastSwitch;
+      const timeLeft = Math.max(0, Math.ceil((greenDuration - elapsed)/1000));
+      timerDisplay.textContent = `Time Left: ${timeLeft} s`;
+    }
+
+    // اضافه کردن ماشین‌ها به صورت اولیه (با تنوع بیشتر)
+    function addRandomCars(num) {
+      for(let i=0; i<num; i++) {
+        const dirs = ['NS', 'EW'];
+        const dir = dirs[Math.floor(Math.random()*dirs.length)];
+        let x, z;
+        if(dir === 'NS') {
+          x = -10 + Math.random()*20; // کمی پراکندگی عرضی
+          z = -roadLength/2 - Math.random()*40;
+        } else {
+          x = roadLength/2 + Math.random()*40;
+          z = -10 + Math.random()*20;
+        }
+        cars.push(new Car(x, z, dir));
+      }
+    }
+
+    addRandomCars(20);
+
+    // تابع تشخیص برخورد ساده (فاصله کمتر از 3 متر)
+    function checkCollisions() {
+      for(let i=0; i<cars.length; i++) {
+        for(let j=i+1; j<cars.length; j++) {
+          if(cars[i].distanceTo(cars[j]) < 3) {
+            return [cars[i], cars[j]];
+          }
+        }
+      }
+      return null;
+    }
+
+    // سناریو برخورد
+    function handleAccident(car1, car2) {
+      if(trafficJam) return; // اگر ترافیک فعال است، برخورد بعدی نگیریم
+
+      trafficJam = true;
+      document.getElementById('infoBox').innerHTML = "🚨 Accident! Police and ambulance dispatched.";
+
+      // ماشین پلیس بساز اگر نیست
+      if(!policeCar) policeCar = new PoliceCar(roadLength/2 + 10, 0, 'EW');
+      if(!ambulance) ambulance = new Ambulance(-roadLength/2 - 10, 0, 'EW');
+
+      // یکی از دو ماشین را مقصر فرض می‌کنیم
+      const culprit = Math.random() < 0.5 ? car1 : car2;
+      culprit.stop();
+
+      // ماشین پلیس به سمت ماشین مقصر حرکت کند و جریمه کند
+      policeCar.chase(culprit);
+
+      // پرت شدن انسان از ماشین مقصر
+      humanInjured = new Human(culprit.group.position.clone().add(new THREE.Vector3(0, 1, 0)));
+
+      // آمبولانس برای نجات انسان به محل حرکت کند
+      ambulance.rescue(humanInjured);
+
+      // بعد از نجات و جریمه، ترافیک دوباره عادی می‌شود (در updatePoliceCar بعد از جریمه کامل)
+    }
+
+    // Main animation loop
+    function animate() {
+      requestAnimationFrame(animate);
+      updateTrafficLights();
+
+      // حرکت ماشین‌ها اگر ترافیک نیست یا ترافیک اما ماشین متوقف نیست
+      cars.forEach(car => {
+        if(!trafficJam || (trafficJam && car.isStopped === false)) {
+          car.update({
+            NS: currentLight === 'NS' ? 'green' : 'red',
+            EW: currentLight === 'EW' ? 'green' : 'red',
+          });
+        }
+      });
+
+      // آپدیت ماشین پلیس
+      if(policeCar) policeCar.update();
+
+      // آپدیت آمبولانس
+      if(ambulance) ambulance.update();
+
+      // آپدیت انسان پرت شده
+      if(humanInjured) humanInjured.update();
+
+      // چک برخوردها فقط وقتی ترافیک نیست (برای جلوگیری از ایجاد برخوردهای جدید در ترافیک)
+      if(!trafficJam) {
+        const collision = checkCollisions();
+        if(collision) {
+          handleAccident(collision[0], collision[1]);
+        }
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    // دوربین و کنترل
+    camera.position.set(0, 50, 70);
+
+    camera.lookAt(0, 0, 0);
+
+    animate();
+
+    
+    window.addEventListener('resize', () => {
+        
+      camera.aspect = window.innerWidth/window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
